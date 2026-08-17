@@ -8,9 +8,9 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-secret-key-change-me")
+SECRET_KEY = os.getenv("DJANGO_SECRET_KEY") or "dev-secret-key-change-me-in-production"
 DEBUG = os.getenv("DEBUG", "true").lower() == "true"
-ALLOWED_HOSTS = os.getenv("ALLOWED_HOSTS", "*").split(",")
+ALLOWED_HOSTS = [h.strip() for h in os.getenv("ALLOWED_HOSTS", "*").split(",") if h.strip()]
 
 INSTALLED_APPS = [
 	"django.contrib.admin",
@@ -27,9 +27,9 @@ INSTALLED_APPS = [
 ]
 
 MIDDLEWARE = [
+	"corsheaders.middleware.CorsMiddleware",
 	"django.middleware.security.SecurityMiddleware",
 	"whitenoise.middleware.WhiteNoiseMiddleware",
-	"corsheaders.middleware.CorsMiddleware",
 	"django.middleware.common.CommonMiddleware",
 	"django.middleware.csrf.CsrfViewMiddleware",
 	"django.contrib.sessions.middleware.SessionMiddleware",
@@ -58,15 +58,23 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "analytic_api.wsgi.application"
 
-DB_VENDOR = os.getenv("DB_VENDOR", "sqlite").lower()
-if DB_VENDOR == "sqlite":
+_database_url = os.getenv("DATABASE_URL")
+if _database_url:
+	# Render / Supabase / Railway provide DATABASE_URL directly
+	import urllib.parse as _up
+	_u = _up.urlparse(_database_url)
 	DATABASES = {
 		"default": {
-			"ENGINE": "django.db.backends.sqlite3",
-			"NAME": BASE_DIR / "db.sqlite3",
+			"ENGINE": "django.db.backends.postgresql",
+			"NAME": _u.path.lstrip("/"),
+			"USER": _u.username,
+			"PASSWORD": _u.password,
+			"HOST": _u.hostname,
+			"PORT": _u.port or 5432,
+			"OPTIONS": {"sslmode": "require"},
 		}
 	}
-else:
+elif os.getenv("DB_VENDOR", "sqlite").lower() == "postgres":
 	DATABASES = {
 		"default": {
 			"ENGINE": "django.db.backends.postgresql",
@@ -75,6 +83,13 @@ else:
 			"PASSWORD": os.getenv("POSTGRES_PASSWORD", "analytics_password"),
 			"HOST": os.getenv("POSTGRES_HOST", "localhost"),
 			"PORT": os.getenv("POSTGRES_PORT", "5432"),
+		}
+	}
+else:
+	DATABASES = {
+		"default": {
+			"ENGINE": "django.db.backends.sqlite3",
+			"NAME": BASE_DIR / "db.sqlite3",
 		}
 	}
 
@@ -88,6 +103,8 @@ if redis_url:
 			"KEY_PREFIX": "analytics",
 		}
 	}
+	CELERY_BROKER_URL = redis_url
+	CELERY_RESULT_BACKEND = redis_url
 else:
 	CACHES = {
 		"default": {
@@ -95,9 +112,15 @@ else:
 			"LOCATION": "analytics-local",
 		}
 	}
+	# No Redis: run Celery tasks synchronously in the same process
+	CELERY_TASK_ALWAYS_EAGER = True
+	CELERY_BROKER_URL = "memory://"
+	CELERY_RESULT_BACKEND = "cache+memory://"
 
-SESSION_ENGINE = "django.contrib.sessions.backends.cache"
-SESSION_CACHE_ALIAS = "default"
+SESSION_ENGINE = "django.contrib.sessions.backends.db"
+SESSION_COOKIE_SAMESITE = "Lax"
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_SAMESITE = "Lax"
 
 AUTH_PASSWORD_VALIDATORS = [
 	{"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -113,9 +136,31 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = os.getenv("CORS_ALLOW_ALL_ORIGINS", "true").lower() == "true"
+
+CORS_ALLOWED_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ALLOWED_ORIGINS", "").split(",")
+    if o.strip()
+]
+
+CORS_ALLOW_CREDENTIALS = True
+
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5173",
+    "http://127.0.0.1:5174",
+    *[o.strip() for o in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",") if o.strip()],
+]
+
+from corsheaders.defaults import default_headers
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "x-api-key",
+]
 
 REST_FRAMEWORK = {
 	"DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
@@ -141,6 +186,9 @@ SPECTACULAR_SETTINGS = {
 	"VERSION": "1.0.0",
 	"SERVE_INCLUDE_SCHEMA": False,
 }
+
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
 
 # Simple flag for Google auth integration placeholder
 ENABLE_GOOGLE_AUTH = os.getenv("ENABLE_GOOGLE_AUTH", "false").lower() == "true"

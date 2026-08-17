@@ -4,6 +4,8 @@ services:
     command: bash -c "python manage.py migrate && gunicorn analytic_api.wsgi:application --bind 0.0.0.0:8000"
     ports:
       - "8000:8000"
+    volumes:
+      - app_data:/app
     environment:
       DEBUG: "true"
       DB_VENDOR: sqlite
@@ -11,9 +13,25 @@ services:
       ALLOWED_HOSTS: "*"
     depends_on:
       - redis
+
+  celery:
+    build: .
+    command: celery -A analytic_api worker --loglevel=info
+    volumes:
+      - app_data:/app
+    environment:
+      DEBUG: "true"
+      DB_VENDOR: sqlite
+      REDIS_URL: redis://redis:6379/1
+      ALLOWED_HOSTS: "*"
+    depends_on:
+      - redis
+      - web
+
   redis:
     image: redis:7
     ports:
       - "6379:6379"
 
-
+volumes:
+  app_data:
